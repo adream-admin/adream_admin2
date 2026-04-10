@@ -1,0 +1,154 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int       @id @default(autoincrement())
+  username  String    @unique
+  password  String
+  name      String
+  role      String    @default("manager")
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy Int?
+
+  auditLogs AuditLog[]
+}
+
+model Account {
+  id         Int       @id @default(autoincrement())
+  server     String
+  ip         String?
+  accountId  String
+  password   String
+  category   String?
+  createdAt  DateTime  @default(now())
+  name       String?
+  birthDate  String?
+  gender     String?
+  phone      String?
+  email      String?
+  note       String?
+  isActive   Boolean   @default(true)
+
+  workItems  WorkItem[]
+
+  @@index([server])
+  @@index([isActive])
+}
+
+model Company {
+  id                   Int       @id @default(autoincrement())
+  // API 자동 입력 항목
+  receiptSource        String?   // 접수처
+  companyName          String    // 업체명
+  placeAddress         String?   // 플레이스주소
+  midValue             String?   // MID 값
+  contentType          String?   // 글의 종류
+  manuscriptPhoto      String?   // 원고 사진
+  mainKeyword          String?   // 메인 키워드
+  keyword              String?   // 키워드
+  tag                  String?   // 태그
+  companyGuide         String?   // 업체가이드
+  // 직접 입력 항목
+  prompt               String?   // 프롬프트
+  paragraphCount       String    @default("4")   // 문단갯수
+  subTopic             String    @default("ON")  // 소주제
+  introPath            String?   // 인트로 경로
+  companyParagraphImage String?  // 업체 문단이미지
+  randomSticker        String    @default("ON")  // 랜덤스티커
+  location             String?   // 장소
+  mapPosition          String    @default("하단") // 지도위치
+
+  isActive              Boolean   @default(true)
+  status                String    @default("신규접수")  // 신규접수 | 완료
+  promptUpdateRequired  Boolean   @default(false)  // 수정확인 플래그
+  modifiedFields        String?   // JSON array — 마지막 수정요청에서 변경된 필드명 목록
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  orders     Order[]
+  schedules  Schedule[]
+}
+
+model Order {
+  id          Int       @id @default(autoincrement())
+  companyId   Int
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  startDate   DateTime
+  endDate     DateTime
+  dailyCount  Int
+  status      String    @default("pending")
+  externalId  String?   @unique
+  createdAt   DateTime  @default(now())
+
+  schedules   Schedule[]
+}
+
+model Schedule {
+  id            Int       @id @default(autoincrement())
+  companyId     Int
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  orderId       Int?
+  order         Order?    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  scheduledDate DateTime
+  status        String    @default("pending")
+  createdAt     DateTime  @default(now())
+
+  workItems WorkItem[]
+
+  @@index([scheduledDate])
+  @@index([companyId])
+}
+
+model WorkItem {
+  id          Int       @id @default(autoincrement())
+  companyCode String?   // 배정 건별 고유 업체코드 (YYYYMMDD-NNN)
+  scheduleId  Int
+  schedule    Schedule  @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  accountId   Int?
+  account     Account?  @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  server      String?
+  workDate    DateTime
+  excelFile   String?
+  createdAt   DateTime  @default(now())
+
+  @@index([workDate])
+  @@index([server])
+  @@index([accountId])
+}
+
+model SystemSetting {
+  id    Int    @id @default(autoincrement())
+  key   String @unique
+  value String
+}
+
+model OrderSyncLog {
+  id          Int      @id @default(autoincrement())
+  action      String   // 'new' | 'modify' | 'stop'
+  externalId  String?
+  companyName String?
+  payload     String   // JSON — 수신된 전체 데이터
+  result      String?  // 'created' | 'duplicate' | 'skipped' | 'modified' | 'stopped'
+  createdAt   DateTime @default(now())
+
+  @@index([action])
+  @@index([createdAt])
+}
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+  action    String
+  target    String?
+  details   String?
+  createdAt DateTime @default(now())
+}

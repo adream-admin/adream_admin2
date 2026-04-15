@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { parseUTCDate } from '@/lib/dateUtils';
+import { parseUTCDate, tomorrowKST } from '@/lib/dateUtils';
 import { alertServerError } from '@/lib/errorAlert';
 
 // 수정확인 대상 필드 — API 자동 입력 항목 전체 추적
@@ -12,8 +12,17 @@ type TrackedField = typeof MODIFY_TRACKED_FIELDS[number];
 
 // External API endpoint - receives orders from blog order admin
 
+function verifyInternalApiKey(req: NextRequest): boolean {
+  const apiKey = process.env.SCHEDULE_INTERNAL_API_KEY;
+  if (!apiKey) return false;
+  return req.headers.get('x-internal-api-key') === apiKey;
+}
+
 // POST: Create new order (승인대기 승인)
 export async function POST(req: NextRequest) {
+  if (!verifyInternalApiKey(req)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   try {
     const body = await req.json();
     const orders = Array.isArray(body) ? body : [body];
@@ -181,6 +190,9 @@ export async function POST(req: NextRequest) {
 
 // PATCH: Modify order (수정요청 승인)
 export async function PATCH(req: NextRequest) {
+  if (!verifyInternalApiKey(req)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   try {
     const {
       externalId,
@@ -269,9 +281,7 @@ export async function PATCH(req: NextRequest) {
       });
 
       if (datesChanged) {
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        tomorrow.setHours(0, 0, 0, 0);
+        const tomorrow = parseUTCDate(tomorrowKST());
 
         const futureSchedules = await tx.schedule.findMany({
           where: { orderId: order.id, scheduledDate: { gte: tomorrow } },

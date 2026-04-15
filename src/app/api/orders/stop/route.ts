@@ -2,8 +2,17 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { getDayRange, parseUTCDate } from '@/lib/dateUtils';
 
+function verifyInternalApiKey(req: NextRequest): boolean {
+  const apiKey = process.env.SCHEDULE_INTERNAL_API_KEY;
+  if (!apiKey) return false;
+  return req.headers.get('x-internal-api-key') === apiKey;
+}
+
 // POST: Stop order - delete future unassigned schedules (중단요청 승인)
 export async function POST(req: NextRequest) {
+  if (!verifyInternalApiKey(req)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   try {
     const { externalId, stopDate } = await req.json();
 

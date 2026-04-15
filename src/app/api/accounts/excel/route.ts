@@ -6,6 +6,7 @@ import * as XLSX from 'xlsx';
 export async function POST(req: NextRequest) {
   const session = await getTokenFromRequest(req);
   if (!session) return NextResponse.json({ error: '인증 필요' }, { status: 401 });
+  if (session.role !== 'admin') return NextResponse.json({ error: '관리자만 접근 가능합니다' }, { status: 403 });
 
   const { ids } = await req.json();
 

@@ -12,9 +12,9 @@ function createPrisma() {
   // SQLite 동시 쓰기 안전 설정 + 관리자 비밀번호 초기화
   const init = async () => {
     await client.$queryRawUnsafe('PRAGMA journal_mode=WAL');
-    await client.$executeRawUnsafe('PRAGMA synchronous=NORMAL');
-    await client.$executeRawUnsafe('PRAGMA busy_timeout=5000'); // 쓰기 충돌 시 5초 대기
-    await client.$executeRawUnsafe('PRAGMA cache_size=-32000');
+    await client.$queryRawUnsafe('PRAGMA synchronous=NORMAL');
+    await client.$queryRawUnsafe('PRAGMA busy_timeout=5000');
+    await client.$queryRawUnsafe('PRAGMA cache_size=-32000');
 
     // 관리자 기본 비밀번호(admin1234) → ADMIN_INITIAL_PASSWORD로 자동 교체
     const initialPw = process.env.ADMIN_INITIAL_PASSWORD;

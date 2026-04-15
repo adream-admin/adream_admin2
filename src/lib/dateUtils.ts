@@ -1,10 +1,26 @@
 /**
  * 날짜 문자열을 UTC 자정(00:00:00Z)으로 파싱.
- * new Date("2024-01-15") 는 UTC 자정으로 파싱되지만,
- * 서버 로컬 타임존에 따라 동작이 다를 수 있으므로 명시적으로 Z를 붙인다.
+ * DB 저장 및 Prisma 쿼리에 사용.
  */
 export function parseUTCDate(dateStr: string): Date {
   return new Date(dateStr + 'T00:00:00.000Z');
+}
+
+/**
+ * KST 기준 현재 날짜 문자열 (YYYY-MM-DD)
+ * 서버가 UTC 환경이어도 한국 시간 기준으로 반환.
+ */
+export function todayKST(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
+}
+
+/**
+ * KST 기준 내일 날짜 문자열 (YYYY-MM-DD)
+ */
+export function tomorrowKST(): string {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  return tomorrow.toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
 }
 
 /**

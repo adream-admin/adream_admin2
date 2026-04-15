@@ -37,6 +37,7 @@ interface WorkResult {
 export default function WorkPage() {
   const today = format(new Date(), 'yyyy-MM-dd');
   const [date, setDate] = useState(today);
+  const [serverCount, setServerCount] = useState<number>(0);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<WorkResult | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
@@ -51,7 +52,7 @@ export default function WorkPage() {
       const res = await fetch('/api/work', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date }),
+        body: JSON.stringify({ date, serverCount: serverCount || 0 }),
       });
       const data = await res.json();
       if (!res.ok) return toast.error(data.error || '배정에 실패했습니다.');
@@ -109,7 +110,7 @@ export default function WorkPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `스케줄_${result!.date}_${server}.xlsx`;
+      a.download = `스케줄_${result!.date}_${server}.csv`;
       a.click();
       URL.revokeObjectURL(url);
     } finally {
@@ -120,22 +121,30 @@ export default function WorkPage() {
   const handleDownloadAll = async () => {
     setDownloading('all');
     try {
-      const res = await fetch('/api/work/excel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date: result!.date, allServers: true }),
-      });
-      if (!res.ok) {
-        const d = await res.json();
-        return toast.error(d.error || '다운로드 실패');
+      const servers = Object.keys(result!.byServer).sort();
+      for (const srv of servers) {
+        const res = await fetch('/api/work/excel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ date: result!.date, server: srv }),
+        });
+        if (!res.ok) {
+          const d = await res.json();
+          toast.error(`${srv} 다운로드 실패: ${d.error || '오류'}`);
+          continue;
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `스케줄_${result!.date}_${srv}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+        await new Promise((resolve) => setTimeout(resolve, 400));
       }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `스케줄_${result!.date}_전체서버.xlsx`;
-      a.click();
-      URL.revokeObjectURL(url);
+      toast.success('전체 다운로드 완료');
+    } catch {
+      toast.error('다운로드 중 오류가 발생했습니다.');
     } finally {
       setDownloading(null);
     }
@@ -159,6 +168,21 @@ export default function WorkPage() {
               value={date}
               onChange={(e) => setDate(e.target.value)}
             />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">배정 서버 수</label>
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                min={0}
+                className="input-field w-20 text-center"
+                value={serverCount || ''}
+                placeholder="전체"
+                onChange={(e) => setServerCount(Number(e.target.value))}
+              />
+              <span className="text-sm text-gray-500">개</span>
+            </div>
+            <p className="text-xs text-gray-400 mt-0.5">비워두면 전체 서버</p>
           </div>
           <button
             onClick={handleRun}

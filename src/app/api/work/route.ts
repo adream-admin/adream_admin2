@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
   const session = await getTokenFromRequest(req);
   if (!session) return NextResponse.json({ error: '인증 필요' }, { status: 401 });
 
-  const { date } = await req.json();
+  const { date, serverCount } = await req.json();
   if (!date) return NextResponse.json({ error: '날짜를 입력하세요.' }, { status: 400 });
 
   const settings = await getSettings();
@@ -140,6 +140,18 @@ export async function POST(req: NextRequest) {
     serverGroups.get(acc.server)!.push(acc);
   }
 
+  // 배정 서버 수 제한: serverCount 입력 시 이름순 정렬 후 상위 N개만 사용
+  if (serverCount && serverCount > 0) {
+    const sortedServers = Array.from(serverGroups.keys()).sort();
+    const limitedServers = new Set(sortedServers.slice(0, serverCount));
+    for (const srv of Array.from(serverGroups.keys())) {
+      if (!limitedServers.has(srv)) serverGroups.delete(srv);
+    }
+  }
+
+  // 오늘 배정 중 업체별 서버 고정 (one_server_per_company 용)
+  const companyTodayServer = new Map<number, string>();
+
   // 업체코드: 접수 어드민 order_code(externalId) 사용. 없으면 날짜+순번 폴백
   const datePrefix = date.replace(/-/g, '');
   let codeSeq = 1;
@@ -169,11 +181,17 @@ export async function POST(req: NextRequest) {
     let serverCandidates = Array.from(serverGroups.keys());
 
     if (settings.one_server_per_company) {
-      const prevServer = companyServerHistory.get(companyId);
-      if (prevServer) {
-        // Must use different server than last time
-        serverCandidates = serverCandidates.filter((s) => s !== prevServer);
-        if (serverCandidates.length === 0) serverCandidates = Array.from(serverGroups.keys());
+      const todayServer = companyTodayServer.get(companyId);
+      if (todayServer) {
+        // 오늘 이미 배정된 서버가 있으면 같은 서버 강제 사용
+        serverCandidates = serverGroups.has(todayServer) ? [todayServer] : serverCandidates;
+      } else {
+        // 이전 날짜 이력에서 사용한 서버 제외
+        const prevServer = companyServerHistory.get(companyId);
+        if (prevServer) {
+          serverCandidates = serverCandidates.filter((s) => s !== prevServer);
+          if (serverCandidates.length === 0) serverCandidates = Array.from(serverGroups.keys());
+        }
       }
     }
 
@@ -257,9 +275,9 @@ export async function POST(req: NextRequest) {
     if (!accountCompanyHistory.has(pick.id)) accountCompanyHistory.set(pick.id, new Set());
     accountCompanyHistory.get(pick.id)!.add(companyId);
 
-    // Update company server (one_server_per_company)
-    if (settings.one_server_per_company) {
-      companyServerHistory.set(companyId, selectedServer);
+    // 오늘 배정 서버 기록 (같은 날 동일 업체는 같은 서버 고정)
+    if (settings.one_server_per_company && assignedServer) {
+      companyTodayServer.set(companyId, assignedServer);
     }
 
     workItems.push({

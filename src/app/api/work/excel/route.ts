@@ -21,10 +21,9 @@ function buildRow(item: {
       tag: string | null;
     };
   };
-}, idx: number) {
+}, workDate: string) {
   const c = item.schedule.company;
   return {
-    'NO': idx + 1,
     '아이디': item.account?.accountId || '미배정',
     '패스워드': item.account?.password || '',
     'IP': item.account?.ip || '',
@@ -38,27 +37,20 @@ function buildRow(item: {
     '장소': c.location || '',
     '지도위치': c.mapPosition,
     '태그': c.tag || '',
-    '업체코드': item.companyCode || '',
+    '날짜': workDate,           // N열
+    '업체코드': item.companyCode || '', // O열
+    '결과 URL': '',              // P열 공란
   };
 }
 
-const COL_WIDTHS = [
-  { wch: 5 },  // NO
-  { wch: 22 }, // 아이디
-  { wch: 16 }, // 패스워드
-  { wch: 16 }, // IP
-  { wch: 22 }, // 업체명
-  { wch: 30 }, // 프롬프트
-  { wch: 8 },  // 문단갯수
-  { wch: 8 },  // 소주제
-  { wch: 20 }, // 인트로경로
-  { wch: 20 }, // 업체문단이미지
-  { wch: 10 }, // 랜덤스티커
-  { wch: 16 }, // 장소
-  { wch: 10 }, // 지도위치
-  { wch: 24 }, // 태그
-  { wch: 14 }, // 업체코드
-];
+function shuffleArray<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
 
 export async function POST(req: NextRequest) {
   const session = await getTokenFromRequest(req);
@@ -111,35 +103,27 @@ export async function POST(req: NextRequest) {
   const wb = XLSX.utils.book_new();
 
   if (allServers) {
-    const servers = new Map<string, typeof workItems>();
-    for (const item of workItems) {
-      const srv = item.server || '미배정';
-      if (!servers.has(srv)) servers.set(srv, []);
-      servers.get(srv)!.push(item);
-    }
-
-    for (const [srv, items] of servers) {
-      const sheetData = items.map((item, idx) => buildRow(item, idx));
-      const ws = XLSX.utils.json_to_sheet(sheetData);
-      ws['!cols'] = COL_WIDTHS;
-      XLSX.utils.book_append_sheet(wb, ws, srv.substring(0, 31));
-    }
-  } else {
-    const sheetData = workItems.map((item, idx) => buildRow(item, idx));
+    // allServers: 서버별로 합쳐서 CSV 1개 출력
+    const shuffled = shuffleArray(workItems);
+    const sheetData = shuffled.map((item) => buildRow(item, date));
     const ws = XLSX.utils.json_to_sheet(sheetData);
-    ws['!cols'] = COL_WIDTHS;
-    XLSX.utils.book_append_sheet(wb, ws, server || '전체');
+    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+  } else {
+    const shuffled = shuffleArray(workItems);
+    const sheetData = shuffled.map((item) => buildRow(item, date));
+    const ws = XLSX.utils.json_to_sheet(sheetData);
+    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
   }
 
-  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  const csv = XLSX.write(wb, { type: 'buffer', bookType: 'csv' });
   const filename = allServers
     ? `스케줄_${date}_전체서버`
     : `스케줄_${date}_${server}`;
 
-  return new NextResponse(buf, {
+  return new NextResponse(csv, {
     headers: {
-      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(filename)}.xlsx`,
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(filename)}.csv`,
     },
   });
 }

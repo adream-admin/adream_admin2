@@ -481,13 +481,13 @@ export async function PATCH(req: NextRequest) {
     }
   }
 
-  const lastAssignCount = new Map<number, number>();
-
-  // 미배정 workItem ID → schedule 매핑
+  // 미배정 추가 배정: S1부터 round-robin으로 배분, 서버명은 "S1미배정" 형식
+  const sortedServers = Array.from(serverGroups.keys()).sort();
   const unassignedMap = new Map(existingUnassigned.map((w) => [w.scheduleId, w]));
-
   const updates: Array<{ id: number; accountId: number; server: string }> = [];
   const creates: Array<{ scheduleId: number; accountId: number; server: string; companyCode: string; workDate: Date }> = [];
+
+  let roundRobinIdx = 0;
 
   for (const schedule of schedules) {
     const companyId = schedule.companyId;
@@ -496,29 +496,13 @@ export async function PATCH(req: NextRequest) {
       continue;
     }
 
-    let serverCandidates = Array.from(serverGroups.keys());
+    if (sortedServers.length === 0) continue;
 
-    if (settings.one_server_per_company) {
-      const todayServer = companyTodayServer.get(companyId);
-      if (todayServer) {
-        serverCandidates = serverGroups.has(todayServer) ? [todayServer] : serverCandidates;
-      } else {
-        const prevServer = companyServerHistory.get(companyId);
-        if (prevServer) {
-          serverCandidates = serverCandidates.filter((s) => s !== prevServer);
-          if (serverCandidates.length === 0) serverCandidates = Array.from(serverGroups.keys());
-        }
-      }
-    }
+    // round-robin으로 서버 선택
+    const selectedServer = sortedServers[roundRobinIdx % sortedServers.length];
+    roundRobinIdx++;
+    const displayServer = `${selectedServer}미배정`; // 화면/엑셀에서 분리 표시용
 
-    serverCandidates = serverCandidates.filter(
-      (s) => (todayServerCount.get(s) || 0) < settings.server_daily_limit
-    );
-
-    if (serverCandidates.length === 0) continue;
-
-    serverCandidates.sort((a, b) => (todayServerCount.get(a) || 0) - (todayServerCount.get(b) || 0));
-    const selectedServer = serverCandidates[0];
     const serverAccounts = serverGroups.get(selectedServer) || [];
 
     let eligible = serverAccounts.filter((acc) => {
@@ -543,31 +527,19 @@ export async function PATCH(req: NextRequest) {
     if (eligible.length === 0) continue;
 
     eligible.sort((a, b) => (todayAccountCount.get(a.id) || 0) - (todayAccountCount.get(b.id) || 0));
-    const minCount = todayAccountCount.get(eligible[0].id) || 0;
-    const sameMinGroup = eligible.filter((a) => (todayAccountCount.get(a.id) || 0) === minCount);
-    const filtered = sameMinGroup.filter((a) => {
-      const last = lastAssignCount.get(a.id);
-      return last === undefined || last !== minCount + 1;
-    });
-    const pool = filtered.length > 0 ? filtered : sameMinGroup;
-    const pick = pool[Math.floor(Math.random() * pool.length)];
+    const pick = eligible[0];
 
     todayAccountCount.set(pick.id, (todayAccountCount.get(pick.id) || 0) + 1);
-    todayServerCount.set(selectedServer, (todayServerCount.get(selectedServer) || 0) + 1);
-    lastAssignCount.set(pick.id, todayAccountCount.get(pick.id)!);
     if (!accountCompanyHistory.has(pick.id)) accountCompanyHistory.set(pick.id, new Set());
     accountCompanyHistory.get(pick.id)!.add(companyId);
-    if (settings.one_server_per_company) companyTodayServer.set(companyId, selectedServer);
 
     const existingWorkItem = unassignedMap.get(schedule.id);
     if (existingWorkItem) {
-      // 기존 미배정 WorkItem → 업데이트
-      updates.push({ id: existingWorkItem.id, accountId: pick.id, server: selectedServer });
+      updates.push({ id: existingWorkItem.id, accountId: pick.id, server: displayServer });
     } else {
-      // WorkItem 없는 스케줄 → 새로 생성
       const datePrefix = date.replace(/-/g, '');
       const companyCode = schedule.order?.externalId ?? `${datePrefix}-NEW`;
-      creates.push({ scheduleId: schedule.id, accountId: pick.id, server: selectedServer, companyCode, workDate });
+      creates.push({ scheduleId: schedule.id, accountId: pick.id, server: displayServer, companyCode, workDate });
     }
   }
 

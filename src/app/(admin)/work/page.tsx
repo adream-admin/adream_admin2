@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
 
@@ -88,14 +88,14 @@ export default function WorkPage() {
     }
   };
 
-  const handleLoad = async () => {
-    if (!date) return toast.error('날짜를 입력하세요.');
+  const handleLoad = useCallback(async (silentIfEmpty = false) => {
+    if (!date) return;
     const res = await fetch(`/api/work?date=${date}`);
-    if (!res.ok) return toast.error('불러오기에 실패했습니다.');
+    if (!res.ok) { if (!silentIfEmpty) toast.error('불러오기에 실패했습니다.'); return; }
     const items: WorkItem[] = await res.json();
 
     if (items.length === 0) {
-      toast('해당 날짜에 배정된 데이터가 없습니다.', { icon: 'ℹ️' });
+      if (!silentIfEmpty) toast('해당 날짜에 배정된 데이터가 없습니다.', { icon: 'ℹ️' });
       setResult(null);
       return;
     }
@@ -115,7 +115,12 @@ export default function WorkPage() {
       byServer: Object.fromEntries(byServer),
       items,
     });
-  };
+  }, [date]);
+
+  // 페이지 진입 시 오늘 날짜 데이터 자동 로드
+  useEffect(() => {
+    handleLoad(true);
+  }, [handleLoad]);
 
   const handleDownloadServer = async (server: string) => {
     setDownloading(server);
@@ -226,7 +231,7 @@ export default function WorkPage() {
           >
             {running ? '배정 중...' : `➕ 미배정 추가 배정${result && result.unassigned > 0 ? ` (${result.unassigned}건)` : ''}`}
           </button>
-          <button onClick={handleLoad} className="btn-secondary">
+          <button onClick={() => handleLoad()} className="btn-secondary">
             📋 기존 배정 불러오기
           </button>
         </div>

@@ -9,3 +9,6 @@ prisma/*.db-wal
 /backups/
 .claude/
 tsconfig.tsbuildinfo
+prisma/prisma/
+*.db
+*.db-journal

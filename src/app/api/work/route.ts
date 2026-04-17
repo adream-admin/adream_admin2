@@ -501,12 +501,20 @@ export async function PATCH(req: NextRequest) {
 
     if (sortedServers.length === 0) continue;
 
-    // 업체 단위 round-robin: 해당 업체에 배정된 서버가 없으면 새로 배정
-    if (!companyAssignedServer.has(companyId)) {
-      companyAssignedServer.set(companyId, sortedServers[roundRobinIdx % sortedServers.length]);
+    // 서버 선택:
+    // - one_server_per_company ON  → 업체 단위 round-robin (같은 업체 = 같은 서버)
+    // - one_server_per_company OFF → 스케줄 단위 round-robin (분산 배정)
+    let selectedServer: string;
+    if (settings.one_server_per_company) {
+      if (!companyAssignedServer.has(companyId)) {
+        companyAssignedServer.set(companyId, sortedServers[roundRobinIdx % sortedServers.length]);
+        roundRobinIdx++;
+      }
+      selectedServer = companyAssignedServer.get(companyId)!;
+    } else {
+      selectedServer = sortedServers[roundRobinIdx % sortedServers.length];
       roundRobinIdx++;
     }
-    const selectedServer = companyAssignedServer.get(companyId)!;
     const displayServer = `${selectedServer}미배정`; // 화면/엑셀에서 분리 표시용
 
     const serverAccounts = serverGroups.get(selectedServer) || [];

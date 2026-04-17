@@ -481,12 +481,15 @@ export async function PATCH(req: NextRequest) {
     }
   }
 
-  // 미배정 추가 배정: S1부터 round-robin으로 배분, 서버명은 "S1미배정" 형식
+  // 미배정 추가 배정: 업체 단위 round-robin (같은 업체의 스케줄은 같은 서버)
+  // 서버명은 "S1미배정" 형식으로 기존 그룹과 분리
   const sortedServers = Array.from(serverGroups.keys()).sort();
   const unassignedMap = new Map(existingUnassigned.map((w) => [w.scheduleId, w]));
   const updates: Array<{ id: number; accountId: number; server: string }> = [];
   const creates: Array<{ scheduleId: number; accountId: number; server: string; companyCode: string; workDate: Date }> = [];
 
+  // 업체별 배정 서버 고정 (같은 업체는 항상 같은 서버)
+  const companyAssignedServer = new Map<number, string>();
   let roundRobinIdx = 0;
 
   for (const schedule of schedules) {
@@ -498,9 +501,12 @@ export async function PATCH(req: NextRequest) {
 
     if (sortedServers.length === 0) continue;
 
-    // round-robin으로 서버 선택
-    const selectedServer = sortedServers[roundRobinIdx % sortedServers.length];
-    roundRobinIdx++;
+    // 업체 단위 round-robin: 해당 업체에 배정된 서버가 없으면 새로 배정
+    if (!companyAssignedServer.has(companyId)) {
+      companyAssignedServer.set(companyId, sortedServers[roundRobinIdx % sortedServers.length]);
+      roundRobinIdx++;
+    }
+    const selectedServer = companyAssignedServer.get(companyId)!;
     const displayServer = `${selectedServer}미배정`; // 화면/엑셀에서 분리 표시용
 
     const serverAccounts = serverGroups.get(selectedServer) || [];

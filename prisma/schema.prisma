@@ -46,7 +46,8 @@ model Account {
 model Company {
   id                   Int       @id @default(autoincrement())
   // API 자동 입력 항목
-  receiptSource        String?   // 접수처
+  receiptSource        String?   // 업체코드
+  businessName         String?   // 사업자명
   companyName          String    // 업체명
   placeAddress         String?   // 플레이스주소
   midValue             String?   // MID 값

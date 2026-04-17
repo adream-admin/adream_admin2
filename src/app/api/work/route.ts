@@ -328,3 +328,236 @@ export async function POST(req: NextRequest) {
     items: result,
   });
 }
+
+// PATCH: 미배정 항목만 추가 배정 (기존 배정 유지)
+export async function PATCH(req: NextRequest) {
+  const session = await getTokenFromRequest(req);
+  if (!session) return NextResponse.json({ error: '인증 필요' }, { status: 401 });
+
+  const { date, serverCount } = await req.json();
+  if (!date) return NextResponse.json({ error: '날짜를 입력하세요.' }, { status: 400 });
+
+  const settings = await getSettings();
+  const { start: dayStart, end: dayEnd } = getDayRange(date);
+  const workDate = parseUTCDate(date);
+
+  // 이미 배정된 workItem scheduleId 수집 (accountId가 있는 것만)
+  const existingAssigned = await prisma.workItem.findMany({
+    where: { workDate: { gte: dayStart, lt: dayEnd }, accountId: { not: null } },
+    select: { scheduleId: true },
+  });
+  const assignedScheduleIds = new Set(existingAssigned.map((w) => w.scheduleId));
+
+  // 미배정 workItem (accountId null)의 scheduleId 수집
+  const existingUnassigned = await prisma.workItem.findMany({
+    where: { workDate: { gte: dayStart, lt: dayEnd }, accountId: null },
+    select: { id: true, scheduleId: true, companyCode: true },
+  });
+
+  if (existingUnassigned.length === 0) {
+    return NextResponse.json({ message: '미배정 항목이 없습니다.', count: 0 });
+  }
+
+  // 미배정 workItem의 scheduleId로 schedule 조회
+  const unassignedScheduleIds = existingUnassigned.map((w) => w.scheduleId);
+  const schedules = await prisma.schedule.findMany({
+    where: { id: { in: unassignedScheduleIds } },
+    include: { company: true, order: true },
+    orderBy: [{ companyId: 'asc' }, { id: 'asc' }],
+  });
+
+  const accounts = await prisma.account.findMany({
+    where: { isActive: true },
+    orderBy: { id: 'asc' },
+  });
+
+  if (accounts.length === 0) {
+    return NextResponse.json({ error: '사용 가능한 아이디가 없습니다.' }, { status: 400 });
+  }
+
+  const historyStart = new Date(date);
+  historyStart.setDate(historyStart.getDate() - settings.no_duplicate_days);
+
+  const recentWork = await prisma.workItem.findMany({
+    where: {
+      workDate: { gte: historyStart, lt: dayStart },
+      accountId: { not: null },
+    },
+    include: { schedule: true },
+    orderBy: { workDate: 'desc' },
+  });
+
+  const accountCompanyHistory = new Map<number, Set<number>>();
+  for (const w of recentWork) {
+    if (!w.accountId) continue;
+    if (!accountCompanyHistory.has(w.accountId)) accountCompanyHistory.set(w.accountId, new Set());
+    accountCompanyHistory.get(w.accountId)!.add(w.schedule.companyId);
+  }
+
+  const recentAssignCount = new Map<number, number>();
+  for (const w of recentWork) {
+    if (!w.accountId) continue;
+    recentAssignCount.set(w.accountId, (recentAssignCount.get(w.accountId) || 0) + 1);
+  }
+
+  const companyServerHistory = new Map<number, string>();
+  if (settings.one_server_per_company) {
+    for (const w of recentWork) {
+      if (w.server && !companyServerHistory.has(w.schedule.companyId)) {
+        companyServerHistory.set(w.schedule.companyId, w.server);
+      }
+    }
+  }
+
+  // 오늘 이미 배정된 건 기준으로 카운트 초기화
+  const todayExisting = await prisma.workItem.findMany({
+    where: { workDate: { gte: dayStart, lt: dayEnd }, accountId: { not: null } },
+    select: { accountId: true, server: true, schedule: { select: { companyId: true } } },
+  });
+
+  const todayAccountCount = new Map<number, number>();
+  const todayServerCount = new Map<string, number>();
+  const companyTodayServer = new Map<number, string>();
+
+  for (const w of todayExisting) {
+    if (w.accountId) todayAccountCount.set(w.accountId, (todayAccountCount.get(w.accountId) || 0) + 1);
+    if (w.server) todayServerCount.set(w.server, (todayServerCount.get(w.server) || 0) + 1);
+    if (settings.one_server_per_company && w.server) companyTodayServer.set(w.schedule.companyId, w.server);
+    if (w.accountId) {
+      if (!accountCompanyHistory.has(w.accountId)) accountCompanyHistory.set(w.accountId, new Set());
+      accountCompanyHistory.get(w.accountId)!.add(w.schedule.companyId);
+    }
+  }
+
+  const serverGroups = new Map<string, typeof accounts>();
+  for (const acc of accounts) {
+    if (!serverGroups.has(acc.server)) serverGroups.set(acc.server, []);
+    serverGroups.get(acc.server)!.push(acc);
+  }
+
+  if (serverCount && serverCount > 0) {
+    const sortedServers = Array.from(serverGroups.keys()).sort();
+    const limitedServers = new Set(sortedServers.slice(0, serverCount));
+    for (const srv of Array.from(serverGroups.keys())) {
+      if (!limitedServers.has(srv)) serverGroups.delete(srv);
+    }
+  }
+
+  const lastAssignCount = new Map<number, number>();
+
+  // 미배정 workItem ID → schedule 매핑
+  const unassignedMap = new Map(existingUnassigned.map((w) => [w.scheduleId, w]));
+
+  const updates: Array<{ id: number; accountId: number; server: string }> = [];
+
+  for (const schedule of schedules) {
+    const companyId = schedule.companyId;
+
+    if (schedule.company.status === '신규접수' || !schedule.company.isActive || schedule.company.promptUpdateRequired) {
+      continue;
+    }
+
+    let serverCandidates = Array.from(serverGroups.keys());
+
+    if (settings.one_server_per_company) {
+      const todayServer = companyTodayServer.get(companyId);
+      if (todayServer) {
+        serverCandidates = serverGroups.has(todayServer) ? [todayServer] : serverCandidates;
+      } else {
+        const prevServer = companyServerHistory.get(companyId);
+        if (prevServer) {
+          serverCandidates = serverCandidates.filter((s) => s !== prevServer);
+          if (serverCandidates.length === 0) serverCandidates = Array.from(serverGroups.keys());
+        }
+      }
+    }
+
+    serverCandidates = serverCandidates.filter(
+      (s) => (todayServerCount.get(s) || 0) < settings.server_daily_limit
+    );
+
+    if (serverCandidates.length === 0) continue;
+
+    serverCandidates.sort((a, b) => (todayServerCount.get(a) || 0) - (todayServerCount.get(b) || 0));
+    const selectedServer = serverCandidates[0];
+    const serverAccounts = serverGroups.get(selectedServer) || [];
+
+    let eligible = serverAccounts.filter((acc) => {
+      const history = accountCompanyHistory.get(acc.id);
+      if (history && history.has(companyId)) return false;
+      const todayCount = todayAccountCount.get(acc.id) || 0;
+      if (todayCount >= settings.daily_assign_per_id) return false;
+      const assignCount = recentAssignCount.get(acc.id) || 0;
+      if (settings.rest_after_assign > 0 && assignCount > 0 && assignCount % settings.rest_after_assign === 0) return false;
+      return true;
+    });
+
+    if (eligible.length === 0) {
+      eligible = serverAccounts.filter((acc) => {
+        const history = accountCompanyHistory.get(acc.id);
+        if (history && history.has(companyId)) return false;
+        const todayCount = todayAccountCount.get(acc.id) || 0;
+        return todayCount < settings.daily_assign_per_id;
+      });
+    }
+
+    if (eligible.length === 0) continue;
+
+    eligible.sort((a, b) => (todayAccountCount.get(a.id) || 0) - (todayAccountCount.get(b.id) || 0));
+    const minCount = todayAccountCount.get(eligible[0].id) || 0;
+    const sameMinGroup = eligible.filter((a) => (todayAccountCount.get(a.id) || 0) === minCount);
+    const filtered = sameMinGroup.filter((a) => {
+      const last = lastAssignCount.get(a.id);
+      return last === undefined || last !== minCount + 1;
+    });
+    const pool = filtered.length > 0 ? filtered : sameMinGroup;
+    const pick = pool[Math.floor(Math.random() * pool.length)];
+
+    todayAccountCount.set(pick.id, (todayAccountCount.get(pick.id) || 0) + 1);
+    todayServerCount.set(selectedServer, (todayServerCount.get(selectedServer) || 0) + 1);
+    lastAssignCount.set(pick.id, todayAccountCount.get(pick.id)!);
+    if (!accountCompanyHistory.has(pick.id)) accountCompanyHistory.set(pick.id, new Set());
+    accountCompanyHistory.get(pick.id)!.add(companyId);
+    if (settings.one_server_per_company) companyTodayServer.set(companyId, selectedServer);
+
+    const workItem = unassignedMap.get(schedule.id);
+    if (workItem) updates.push({ id: workItem.id, accountId: pick.id, server: selectedServer });
+  }
+
+  // 미배정 workItem 업데이트 (트랜잭션)
+  if (updates.length > 0) {
+    await prisma.$transaction(
+      updates.map((u) =>
+        prisma.workItem.update({
+          where: { id: u.id },
+          data: { accountId: u.accountId, server: u.server },
+        })
+      )
+    );
+  }
+
+  await createAuditLog(session.userId, 'ADD_ASSIGNMENT', date, `미배정 ${updates.length}건 추가 배정`);
+
+  const result = await prisma.workItem.findMany({
+    where: { workDate: { gte: dayStart, lt: dayEnd } },
+    include: { schedule: { include: { company: true } }, account: true },
+    orderBy: [{ server: 'asc' }, { id: 'asc' }],
+  });
+
+  const byServer = new Map<string, typeof result>();
+  for (const item of result) {
+    const srv = item.server || '미배정';
+    if (!byServer.has(srv)) byServer.set(srv, []);
+    byServer.get(srv)!.push(item);
+  }
+
+  return NextResponse.json({
+    date,
+    total: result.length,
+    assigned: result.filter((r) => r.accountId).length,
+    unassigned: result.filter((r) => !r.accountId).length,
+    addedCount: updates.length,
+    byServer: Object.fromEntries(byServer),
+    items: result,
+  });
+}

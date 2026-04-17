@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 interface Company {
   id: number;
   receiptSource: string | null;
+  businessName: string | null;
   companyName: string;
   placeAddress: string | null;
   midValue: string | null;
@@ -32,6 +33,7 @@ interface Company {
 
 const emptyForm: Partial<Company> = {
   receiptSource: '',
+  businessName: '',
   companyName: '',
   placeAddress: '',
   midValue: '',
@@ -52,7 +54,8 @@ const emptyForm: Partial<Company> = {
 };
 
 const FORM_FIELDS: Array<{ key: keyof Company; label: string; auto: boolean; required?: boolean; default?: string; textarea?: boolean }> = [
-  { key: 'receiptSource',         label: '접수처',          auto: true,  required: true },
+  { key: 'receiptSource',         label: '업체코드',         auto: true,  required: true },
+  { key: 'businessName',          label: '사업자명',         auto: true },
   { key: 'companyName',           label: '업체명',           auto: true,  required: true },
   { key: 'placeAddress',          label: '플레이스주소',     auto: true,  required: true },
   { key: 'midValue',              label: 'MID 값',           auto: true,  required: true },
@@ -217,7 +220,10 @@ export default function CompaniesPage() {
             <tr className="bg-gray-50">
               <th className="table-header">NO</th>
               <th className="table-header">
-                접수처<span className="ml-1 text-blue-400 font-normal text-[10px]">자동</span>
+                업체코드<span className="ml-1 text-blue-400 font-normal text-[10px]">자동</span>
+              </th>
+              <th className="table-header">
+                사업자명<span className="ml-1 text-blue-400 font-normal text-[10px]">자동</span>
               </th>
               <th className="table-header">
                 업체명<span className="ml-1 text-blue-400 font-normal text-[10px]">자동</span>
@@ -245,13 +251,14 @@ export default function CompaniesPage() {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={14} className="table-cell text-center text-gray-400">불러오는 중...</td></tr>
+              <tr><td colSpan={15} className="table-cell text-center text-gray-400">불러오는 중...</td></tr>
             ) : companies.length === 0 ? (
-              <tr><td colSpan={14} className="table-cell text-center text-gray-400">등록된 업체가 없습니다.</td></tr>
+              <tr><td colSpan={15} className="table-cell text-center text-gray-400">등록된 업체가 없습니다.</td></tr>
             ) : companies.map((c, i) => (
               <tr key={c.id} className={`hover:bg-gray-50 ${c.promptUpdateRequired ? 'bg-orange-50' : ''}`}>
                 <td className="table-cell text-center text-gray-400">{i + 1}</td>
-                <td className="table-cell text-gray-500">{val(c, 'receiptSource')}</td>
+                <td className="table-cell font-mono text-gray-500">{val(c, 'receiptSource')}</td>
+                <td className="table-cell text-gray-500">{val(c, 'businessName')}</td>
                 <td className="table-cell font-medium">
                   <div className="flex items-center gap-1 flex-wrap">
                     {c.companyName}

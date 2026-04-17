@@ -65,6 +65,29 @@ export default function WorkPage() {
     }
   };
 
+  const handleAddAssign = async () => {
+    if (!date) return toast.error('날짜를 입력하세요.');
+    if (!result || result.unassigned === 0) return toast.error('미배정 항목이 없습니다.');
+    if (!confirm(`${date} 날짜의 미배정 ${result.unassigned}건에 대해 추가 배정을 실행하시겠습니까?\n기존 배정 항목은 유지됩니다.`)) return;
+
+    setRunning(true);
+    try {
+      const res = await fetch('/api/work', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date, serverCount: serverCount || 0 }),
+      });
+      const data = await res.json();
+      if (!res.ok) return toast.error(data.error || '추가 배정에 실패했습니다.');
+      setResult(data);
+      toast.success(`추가 배정 완료 (${data.addedCount}건 배정됨)`);
+    } catch {
+      toast.error('서버 오류가 발생했습니다.');
+    } finally {
+      setRunning(false);
+    }
+  };
+
   const handleLoad = async () => {
     if (!date) return toast.error('날짜를 입력하세요.');
     const res = await fetch(`/api/work?date=${date}`);
@@ -194,6 +217,14 @@ export default function WorkPage() {
                 <span className="animate-spin">⟳</span> 배정 중...
               </span>
             ) : '⚙️ 작업 실행'}
+          </button>
+          <button
+            onClick={handleAddAssign}
+            disabled={running || !result || result.unassigned === 0}
+            className="btn-secondary px-6 disabled:opacity-40"
+            title="기존 배정은 유지하고 미배정 항목만 추가 배정"
+          >
+            {running ? '배정 중...' : `➕ 미배정 추가 배정${result && result.unassigned > 0 ? ` (${result.unassigned}건)` : ''}`}
           </button>
           <button onClick={handleLoad} className="btn-secondary">
             📋 기존 배정 불러오기

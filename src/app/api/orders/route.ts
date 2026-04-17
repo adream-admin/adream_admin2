@@ -32,6 +32,7 @@ export async function POST(req: NextRequest) {
       const {
         externalId,
         receiptSource,
+        businessName,
         companyName,
         placeAddress,
         midValue,
@@ -71,10 +72,9 @@ export async function POST(req: NextRequest) {
 
       try {
         const result = await prisma.$transaction(async (tx) => {
-          // 접수처 + 업체명 + MID값 모두 일치하면 기존 업체 재사용 (중복 등록 방지)
+          // 업체코드(receiptSource) + MID값 일치하면 기존 업체 재사용 (중복 등록 방지)
           let company = await tx.company.findFirst({
             where: {
-              companyName,
               receiptSource: receiptSource || null,
               midValue: midValue || null,
               isActive: true,
@@ -85,6 +85,7 @@ export async function POST(req: NextRequest) {
             company = await tx.company.create({
               data: {
                 receiptSource,
+                businessName,
                 companyName,
                 placeAddress,
                 midValue,
@@ -96,6 +97,34 @@ export async function POST(req: NextRequest) {
                 companyGuide,
               },
             });
+          } else {
+            // 기존 업체 재사용 시 메인키워드/원고가이드/태그 변경 감지
+            const CHANGE_CHECK_FIELDS = ['mainKeyword', 'companyGuide', 'tag'] as const;
+            const incomingMap: Record<string, string | undefined> = { mainKeyword, companyGuide, tag };
+            const changedFields = CHANGE_CHECK_FIELDS.filter((f) => {
+              const incoming = incomingMap[f];
+              if (incoming === undefined) return false;
+              return incoming !== (company![f] ?? '');
+            });
+
+            if (changedFields.length > 0) {
+              let prevModified: string[] = [];
+              if (company.modifiedFields) {
+                try { prevModified = JSON.parse(company.modifiedFields); } catch { prevModified = []; }
+              }
+              const mergedModified = Array.from(new Set([...prevModified, ...changedFields]));
+              company = await tx.company.update({
+                where: { id: company.id },
+                data: {
+                  mainKeyword: mainKeyword ?? company.mainKeyword,
+                  companyGuide: companyGuide ?? company.companyGuide,
+                  tag: tag ?? company.tag,
+                  businessName: businessName ?? company.businessName,
+                  promptUpdateRequired: true,
+                  modifiedFields: JSON.stringify(mergedModified),
+                },
+              });
+            }
           }
 
           const start = parseUTCDate(startDate);
@@ -197,6 +226,7 @@ export async function PATCH(req: NextRequest) {
     const {
       externalId,
       receiptSource,
+      businessName,
       companyName,
       placeAddress,
       midValue,
@@ -224,7 +254,7 @@ export async function PATCH(req: NextRequest) {
       // Order not found — treat as new creation
       const createRes = await POST(new NextRequest(req.url, {
         method: 'POST',
-        body: JSON.stringify({ externalId, receiptSource, companyName, placeAddress, midValue, contentType, manuscriptPhoto, mainKeyword, keyword, tag, companyGuide, startDate, endDate, dailyCount }),
+        body: JSON.stringify({ externalId, receiptSource, businessName, companyName, placeAddress, midValue, contentType, manuscriptPhoto, mainKeyword, keyword, tag, companyGuide, startDate, endDate, dailyCount }),
         headers: { 'Content-Type': 'application/json' },
       }));
       return createRes;
@@ -265,6 +295,7 @@ export async function PATCH(req: NextRequest) {
         data: {
           companyName: companyName ?? order.company.companyName,
           receiptSource: receiptSource ?? order.company.receiptSource,
+          businessName: businessName ?? order.company.businessName,
           placeAddress: placeAddress ?? order.company.placeAddress,
           midValue: midValue ?? order.company.midValue,
           contentType: contentType ?? order.company.contentType,

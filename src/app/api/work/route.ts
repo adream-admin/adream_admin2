@@ -45,7 +45,28 @@ export async function GET(req: NextRequest) {
     orderBy: [{ server: 'asc' }, { id: 'asc' }],
   });
 
-  return NextResponse.json(workItems);
+  // WorkItem 없는 스케줄도 미배정으로 포함
+  const assignedScheduleIds = new Set(workItems.map((w) => w.scheduleId));
+  const missingSchedules = await prisma.schedule.findMany({
+    where: {
+      scheduledDate: { gte: d, lt: next },
+      id: { notIn: assignedScheduleIds.size > 0 ? Array.from(assignedScheduleIds) : [-1] },
+    },
+    include: { company: true, order: true },
+  });
+
+  const missingItems = missingSchedules.map((s) => ({
+    id: -(s.id), // 음수 id로 구분 (가상 항목)
+    companyCode: s.order?.externalId ?? null,
+    server: null,
+    scheduleId: s.id,
+    accountId: null,
+    workDate: d,
+    schedule: { company: s.company },
+    account: null,
+  }));
+
+  return NextResponse.json([...workItems, ...missingItems]);
 }
 
 // POST: Run assignment for a date
@@ -348,20 +369,37 @@ export async function PATCH(req: NextRequest) {
   });
   const assignedScheduleIds = new Set(existingAssigned.map((w) => w.scheduleId));
 
-  // 미배정 workItem (accountId null)의 scheduleId 수집
+  // 미배정 workItem (accountId null)
   const existingUnassigned = await prisma.workItem.findMany({
     where: { workDate: { gte: dayStart, lt: dayEnd }, accountId: null },
     select: { id: true, scheduleId: true, companyCode: true },
   });
 
-  if (existingUnassigned.length === 0) {
+  // WorkItem이 아예 없는 스케줄도 미배정으로 포함
+  const allWorkItemScheduleIds = new Set([
+    ...existingAssigned.map((w) => w.scheduleId),
+    ...existingUnassigned.map((w) => w.scheduleId),
+  ]);
+  const missingSchedules = await prisma.schedule.findMany({
+    where: {
+      scheduledDate: { gte: dayStart, lt: dayEnd },
+      id: { notIn: allWorkItemScheduleIds.size > 0 ? Array.from(allWorkItemScheduleIds) : [-1] },
+    },
+    include: { order: true },
+  });
+
+  if (existingUnassigned.length === 0 && missingSchedules.length === 0) {
     return NextResponse.json({ message: '미배정 항목이 없습니다.', count: 0 });
   }
 
-  // 미배정 workItem의 scheduleId로 schedule 조회
+  // 미배정 workItem + WorkItem 없는 스케줄 모두 포함하여 schedule 조회
   const unassignedScheduleIds = existingUnassigned.map((w) => w.scheduleId);
+  const allTargetScheduleIds = [
+    ...unassignedScheduleIds,
+    ...missingSchedules.map((s) => s.id),
+  ];
   const schedules = await prisma.schedule.findMany({
-    where: { id: { in: unassignedScheduleIds } },
+    where: { id: { in: allTargetScheduleIds.length > 0 ? allTargetScheduleIds : [-1] } },
     include: { company: true, order: true },
     orderBy: [{ companyId: 'asc' }, { id: 'asc' }],
   });
@@ -449,6 +487,7 @@ export async function PATCH(req: NextRequest) {
   const unassignedMap = new Map(existingUnassigned.map((w) => [w.scheduleId, w]));
 
   const updates: Array<{ id: number; accountId: number; server: string }> = [];
+  const creates: Array<{ scheduleId: number; accountId: number; server: string; companyCode: string; workDate: Date }> = [];
 
   for (const schedule of schedules) {
     const companyId = schedule.companyId;
@@ -520,23 +559,33 @@ export async function PATCH(req: NextRequest) {
     accountCompanyHistory.get(pick.id)!.add(companyId);
     if (settings.one_server_per_company) companyTodayServer.set(companyId, selectedServer);
 
-    const workItem = unassignedMap.get(schedule.id);
-    if (workItem) updates.push({ id: workItem.id, accountId: pick.id, server: selectedServer });
+    const existingWorkItem = unassignedMap.get(schedule.id);
+    if (existingWorkItem) {
+      // 기존 미배정 WorkItem → 업데이트
+      updates.push({ id: existingWorkItem.id, accountId: pick.id, server: selectedServer });
+    } else {
+      // WorkItem 없는 스케줄 → 새로 생성
+      const datePrefix = date.replace(/-/g, '');
+      const companyCode = schedule.order?.externalId ?? `${datePrefix}-NEW`;
+      creates.push({ scheduleId: schedule.id, accountId: pick.id, server: selectedServer, companyCode, workDate });
+    }
   }
 
-  // 미배정 workItem 업데이트 (트랜잭션)
-  if (updates.length > 0) {
-    await prisma.$transaction(
-      updates.map((u) =>
+  // 기존 미배정 WorkItem 업데이트 + 신규 WorkItem 생성 (트랜잭션)
+  const addedCount = updates.length + creates.length;
+  if (updates.length > 0 || creates.length > 0) {
+    await prisma.$transaction([
+      ...updates.map((u) =>
         prisma.workItem.update({
           where: { id: u.id },
           data: { accountId: u.accountId, server: u.server },
         })
-      )
-    );
+      ),
+      ...(creates.length > 0 ? [prisma.workItem.createMany({ data: creates })] : []),
+    ]);
   }
 
-  await createAuditLog(session.userId, 'ADD_ASSIGNMENT', date, `미배정 ${updates.length}건 추가 배정`);
+  await createAuditLog(session.userId, 'ADD_ASSIGNMENT', date, `미배정 ${addedCount}건 추가 배정`);
 
   const result = await prisma.workItem.findMany({
     where: { workDate: { gte: dayStart, lt: dayEnd } },
@@ -556,7 +605,7 @@ export async function PATCH(req: NextRequest) {
     total: result.length,
     assigned: result.filter((r) => r.accountId).length,
     unassigned: result.filter((r) => !r.accountId).length,
-    addedCount: updates.length,
+    addedCount,
     byServer: Object.fromEntries(byServer),
     items: result,
   });
